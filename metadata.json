@@ -1,0 +1,7 @@
+{
+  "name": "Project J.A.R.V.I.S",
+  "description": "Iron Man style holographic interface with gesture controls using MediaPipe and Three.js.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
