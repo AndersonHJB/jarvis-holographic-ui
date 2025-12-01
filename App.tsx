@@ -181,8 +181,6 @@ const App: React.FC = () => {
           // PUSH / PULL (Z-Depth)
           // Hand Big (Close) -> Push Away (Z decreases)
           // Hand Small (Far) -> Pull Close (Z increases)
-          // Only adjust Z if NOT actively grabbing with right hand to avoid conflict, 
-          // OR allow Z modulation while grabbing for full 3D control. Let's allow it.
           const handSize = distance(leftHand[0].x, leftHand[0].y, leftHand[9].x, leftHand[9].y);
           // Tuning: 0.05 (far) to 0.25 (close)
           const targetZ = mapRange(handSize, 0.05, 0.25, 3, -8); 
@@ -191,7 +189,7 @@ const App: React.FC = () => {
           if (!rightHand) statusText = "姿态控制 (推/拉)";
         }
 
-        // 3. RIGHT HAND (Precision Zoom & GRAB MOVE)
+        // 3. RIGHT HAND (Precision Zoom & GRAB MOVE & SPIN)
         if (rightHand) {
           const thumb = rightHand[4];
           const index = rightHand[8];
@@ -210,35 +208,45 @@ const App: React.FC = () => {
           isGrabbingRef.current = isGrabbingFrame;
 
           if (isGrabbingFrame) {
-             // --- GRAB & MOVE LOGIC (PRECISE MAPPING) ---
-             statusText = "物体抓取中";
+             // We are pinching. Now check if it's an "OK" gesture or just a pinch/grab.
+             // OK Gesture: Pinching, but Middle(12), Ring(16), Pinky(20) are EXTENDED.
+             // To check extension, distance from Tip to Wrist should be greater than PIP(10,14,18) to Wrist.
+             const wrist = rightHand[0];
+             const isMiddleExt = distance(wrist.x, wrist.y, rightHand[12].x, rightHand[12].y) > distance(wrist.x, wrist.y, rightHand[10].x, rightHand[10].y);
+             const isRingExt = distance(wrist.x, wrist.y, rightHand[16].x, rightHand[16].y) > distance(wrist.x, wrist.y, rightHand[14].x, rightHand[14].y);
+             const isPinkyExt = distance(wrist.x, wrist.y, rightHand[20].x, rightHand[20].y) > distance(wrist.x, wrist.y, rightHand[18].x, rightHand[18].y);
+
+             // Loose check: at least 2 of the 3 fingers are extended
+             const extendedCount = (isMiddleExt ? 1 : 0) + (isRingExt ? 1 : 0) + (isPinkyExt ? 1 : 0);
+             const isOkGesture = extendedCount >= 2;
+
+             if (isOkGesture) {
+                // --- GRAVITY SPIN MODE (OK Gesture) ---
+                statusText = "引力旋转模式";
+                // High speed spin
+                earthRotationRef.current.y += 0.25; 
+                // Auto scale to 'ball' size
+                setEarthScale(prev => lerp(prev, 0.8, 0.1));
+             } else {
+                // --- NORMAL GRAB MODE ---
+                statusText = "物体抓取中";
+             }
              
-             // Unproject logic: Map 2D Hand to 3D Plane at current depth
-             const cameraZ = 5; // Default camera Z in Three Fiber
+             // --- COMMON MOVE LOGIC (Unprojection) ---
+             const cameraZ = 5; 
              const objectZ = earthPositionRef.current.z;
              const distToCam = cameraZ - objectZ;
-             
-             // Vertical FOV is 45 degrees
              const vFov = (45 * Math.PI) / 180;
-             // Visible height at this depth
              const visibleHeight = 2 * Math.tan(vFov / 2) * distToCam;
-             // Visible width depends on aspect ratio
              const aspect = window.innerWidth / window.innerHeight;
              const visibleWidth = visibleHeight * aspect;
 
-             // Hand Coordinates: x (0..1), y (0..1)
-             // Mirror X: 1 - thumb.x
-             // Center: 0.5
-             
              const rawX = 1 - thumb.x;
              const rawY = thumb.y;
 
-             // Map 0..1 to -width/2 .. width/2
              const targetX = (rawX - 0.5) * visibleWidth;
-             // Map 0..1 to height/2 .. -height/2 (Y is inverted in 3D)
              const targetY = -(rawY - 0.5) * visibleHeight;
 
-             // Direct follow (tighter lerp for "stickiness")
              earthPositionRef.current.x = lerp(earthPositionRef.current.x, targetX, 0.25);
              earthPositionRef.current.y = lerp(earthPositionRef.current.y, targetY, 0.25);
 
@@ -250,19 +258,16 @@ const App: React.FC = () => {
              ctx.beginPath();
              ctx.moveTo(tx, ty);
              ctx.lineTo(ix, iy);
-             ctx.strokeStyle = "#00FFFF";
-             ctx.lineWidth = 4;
+             ctx.strokeStyle = isOkGesture ? "#FFD700" : "#00FFFF"; // Gold for OK, Cyan for Grab
+             ctx.lineWidth = isOkGesture ? 6 : 4;
              ctx.stroke();
 
           } else {
              // --- SCALE LOGIC (Open Hand) ---
-             // Map pinch 0.05 -> Scale 0.5
-             // Map pinch 0.25 -> Scale 2.5
              const targetScale = mapRange(pinchDist, 0.08, 0.25, 0.5, 2.5);
              setEarthScale(prev => lerp(prev, targetScale, 0.1));
 
              // Return to Anchor Logic (Only if not grabbed)
-             // When released, earth floats back to original position
              earthPositionRef.current.x = lerp(earthPositionRef.current.x, ANCHOR_POS.x, 0.08);
              earthPositionRef.current.y = lerp(earthPositionRef.current.y, ANCHOR_POS.y, 0.08);
 
