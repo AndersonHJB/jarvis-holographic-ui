@@ -1,14 +1,16 @@
+
 import React, { useEffect, useRef, useState } from 'react';
-import { Activity, Globe, Wifi, Battery, Database, ShieldCheck, Hand, Move, Cpu, Layers } from 'lucide-react';
+import { Activity, Globe, Wifi, Hand, Move, Mic } from 'lucide-react';
 
 interface HUDProps {
   currentTime: string;
   isHandDetected: boolean;
-  gestureState: string; // "IDLE", "PINCH_LEFT", "PINCH_RIGHT"
+  gestureState: string;
   activeContinent: string;
   rightHandPos: { x: number, y: number } | null;
   isDraggingRight: boolean;
   systemFPS: number;
+  isSpeaking: boolean;
 }
 
 const HUD: React.FC<HUDProps> = ({ 
@@ -18,15 +20,16 @@ const HUD: React.FC<HUDProps> = ({
   activeContinent,
   rightHandPos,
   isDraggingRight,
-  systemFPS
+  systemFPS,
+  isSpeaking
 }) => {
   const [hexCodes, setHexCodes] = useState<string[]>([]);
   const panelRef = useRef<HTMLDivElement>(null);
   
-  // Initial Panel Position (Centered right)
+  // Initial Panel Position
   const [panelPos, setPanelPos] = useState({ x: window.innerWidth - 320, y: 150 });
   
-  // Mock data generation for hex dump
+  // Mock data generation
   useEffect(() => {
     const interval = setInterval(() => {
       const code = `0x${Math.floor(Math.random() * 16777215).toString(16).toUpperCase().padStart(6, '0')}`;
@@ -38,13 +41,11 @@ const HUD: React.FC<HUDProps> = ({
   // Handle Dragging Logic
   useEffect(() => {
     if (isDraggingRight && rightHandPos) {
-      // Map hand position (0-1) to screen coordinates
       const targetX = rightHandPos.x * window.innerWidth;
       const targetY = rightHandPos.y * window.innerHeight;
       
-      // Smooth follow
       setPanelPos({
-        x: Math.max(0, Math.min(window.innerWidth - 300, targetX - 150)), // Center the panel on hand
+        x: Math.max(0, Math.min(window.innerWidth - 300, targetX - 150)), 
         y: Math.max(0, Math.min(window.innerHeight - 300, targetY - 100))
       });
     }
@@ -68,14 +69,8 @@ const HUD: React.FC<HUDProps> = ({
             </div>
           </div>
           <div className="flex justify-between w-48">
-            <span>MEMORY</span>
-            <div className="w-24 bg-cyan-900/50 h-3 border border-cyan-500/30">
-              <div className="bg-cyan-400 h-full" style={{ width: '62%' }}></div>
-            </div>
-          </div>
-          <div className="flex justify-between w-48">
-            <span>NETWORK</span>
-            <span className="text-cyan-200">SECURE // 540Mbps</span>
+            <span>VISUAL CORTEX</span>
+            <span className="text-cyan-200">ACTIVE</span>
           </div>
           <div className="flex justify-between w-48">
              <span>FPS</span>
@@ -91,14 +86,30 @@ const HUD: React.FC<HUDProps> = ({
         </div>
       </div>
 
+      {/* --- Top Center: Audio Visualizer (Dynamic) --- */}
+      {isSpeaking && (
+        <div className="absolute top-8 left-1/2 -translate-x-1/2 flex items-center gap-1 h-12">
+           {Array.from({ length: 20 }).map((_, i) => (
+             <div 
+               key={i} 
+               className="w-1 bg-cyan-400 animate-pulse"
+               style={{ 
+                 height: `${Math.random() * 100}%`,
+                 animationDuration: `${Math.random() * 0.5 + 0.1}s`
+               }}
+             />
+           ))}
+        </div>
+      )}
+
       {/* --- Top Right: Title & Time --- */}
       <div className="absolute top-8 right-8 text-right">
         <h1 className="text-6xl font-bold tracking-tighter glow-text opacity-90">J.A.R.V.I.S</h1>
         <div className="text-2xl tracking-[0.2em] text-cyan-100">{currentTime}</div>
-        <div className="flex justify-end gap-2 mt-2">
-          <div className="w-2 h-2 bg-cyan-400 rounded-full animate-ping"></div>
+        <div className="flex justify-end gap-2 mt-2 items-center">
+          <span className="text-[10px] tracking-widest mr-2">{isSpeaking ? "VOICE ACTIVE" : "LISTENING"}</span>
+          <div className={`w-2 h-2 rounded-full ${isSpeaking ? 'bg-white animate-ping' : 'bg-cyan-900'}`}></div>
           <div className="w-12 h-2 bg-cyan-900 border border-cyan-500"></div>
-          <div className="w-2 h-2 bg-cyan-400"></div>
         </div>
       </div>
 
@@ -107,12 +118,12 @@ const HUD: React.FC<HUDProps> = ({
         <div className="flex items-center gap-3 mb-2">
           <Hand className={`w-5 h-5 ${isHandDetected ? 'text-cyan-400' : 'text-red-500'}`} />
           <span className="text-sm font-semibold tracking-wider">
-            HAND TRACKING: {isHandDetected ? 'ACTIVE' : 'SEARCHING...'}
+            HAND TRACKING: {isHandDetected ? 'LOCKED' : 'SEARCHING...'}
           </span>
         </div>
         <div className="text-xs space-y-1 text-cyan-300">
-          <div>GESTURE: <span className="text-white font-bold">{gestureState}</span></div>
-          <div>MODE: <span className="text-white">{isDraggingRight ? 'DRAG & DROP' : 'OBSERVATION'}</span></div>
+          <div>COMMAND: <span className="text-white font-bold">{gestureState}</span></div>
+          <div>MODE: <span className="text-white">{isDraggingRight ? 'INTERACTION' : 'OBSERVATION'}</span></div>
         </div>
       </div>
 
@@ -123,37 +134,36 @@ const HUD: React.FC<HUDProps> = ({
           transform: `translate(${panelPos.x}px, ${panelPos.y}px)`,
           transition: isDraggingRight ? 'none' : 'transform 0.3s ease-out'
         }}
-        className={`absolute w-72 bg-black/60 backdrop-blur-md border border-cyan-500/40 p-4 rounded-br-2xl shadow-[0_0_15px_rgba(0,255,255,0.15)] 
+        className={`absolute w-72 bg-black/80 backdrop-blur-md border border-cyan-500/40 p-4 rounded-br-2xl shadow-[0_0_15px_rgba(0,255,255,0.15)] 
           ${isDraggingRight ? 'border-white scale-105 shadow-[0_0_25px_rgba(0,255,255,0.4)]' : ''}
         `}
       >
         <div className="flex items-center justify-between mb-4 border-b border-cyan-500/30 pb-2">
           <div className="flex items-center gap-2">
             <Globe className="w-4 h-4" />
-            <h3 className="font-bold tracking-widest text-sm">GEO-ANALYSIS</h3>
+            <h3 className="font-bold tracking-widest text-sm">TARGET ANALYSIS</h3>
           </div>
           {isDraggingRight && <Move className="w-4 h-4 animate-pulse text-white" />}
         </div>
 
         <div className="space-y-4">
           <div className="bg-cyan-900/20 p-2 border-l-2 border-cyan-500">
-            <div className="text-[10px] text-cyan-400 mb-1">CURRENT FOCUS</div>
+            <div className="text-[10px] text-cyan-400 mb-1">REGION</div>
             <div className="text-lg font-bold text-white leading-tight">{activeContinent}</div>
           </div>
 
           <div className="grid grid-cols-2 gap-2 text-center">
             <div className="bg-black/40 p-2 border border-cyan-500/20">
-              <div className="text-[10px] opacity-70">POPULATION</div>
-              <div className="text-sm font-bold">{(Math.random() * 2 + 1).toFixed(2)}B</div>
+              <div className="text-[10px] opacity-70">THREAT LEVEL</div>
+              <div className="text-sm font-bold text-red-400">LOW</div>
             </div>
             <div className="bg-black/40 p-2 border border-cyan-500/20">
-              <div className="text-[10px] opacity-70">ENERGY</div>
+              <div className="text-[10px] opacity-70">ENERGY SIG</div>
               <div className="text-sm font-bold">{Math.floor(Math.random() * 40 + 60)}%</div>
             </div>
           </div>
 
           <div className="h-24 w-full bg-black/50 border border-cyan-500/20 relative overflow-hidden flex items-end">
-             {/* Fake Bar Chart */}
              {Array.from({ length: 15 }).map((_, i) => (
                <div 
                  key={i} 
@@ -162,16 +172,8 @@ const HUD: React.FC<HUDProps> = ({
                />
              ))}
           </div>
-          
-          <div className="text-[10px] text-center opacity-50 pt-2 border-t border-cyan-500/10">
-            DRAG WITH RIGHT HAND PINCH
-          </div>
         </div>
       </div>
-      
-      {/* Decorative Grid Lines */}
-      <div className="absolute bottom-10 right-10 w-32 h-32 border-r border-b border-cyan-500/30 rounded-br-3xl"></div>
-      <div className="absolute top-1/2 left-4 w-1 h-32 bg-gradient-to-b from-transparent via-cyan-500/50 to-transparent"></div>
     </div>
   );
 };
