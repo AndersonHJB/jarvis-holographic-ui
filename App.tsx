@@ -14,7 +14,7 @@ const App: React.FC = () => {
   const requestRef = useRef<number>(0);
   
   // App State
-  const [hasStarted, setHasStarted] = useState(false); // New: User must click to start (for Audio Context)
+  const [hasStarted, setHasStarted] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [fps, setFps] = useState(0);
@@ -27,6 +27,7 @@ const App: React.FC = () => {
   
   // Earth Control State
   const earthRotationRef = useRef({ x: 0, y: 0 }); 
+  const earthPositionRef = useRef({ x: -2, y: 0, z: 0 }); // New: Control Z depth
   const [earthScale, setEarthScale] = useState(1.5);
   const [activeContinent, setActiveContinent] = useState("系统初始化...");
 
@@ -90,8 +91,7 @@ const App: React.FC = () => {
     setTimeout(() => {
       setIsSpeaking(true);
       speak("AI悦创你好，贾维斯系统已上线。全息投影准备就绪。");
-      // Reset speaking state after rough duration estimate or event listener
-      setTimeout(() => setIsSpeaking(false), 4000);
+      setTimeout(() => setIsSpeaking(false), 5000);
       
       // Start Loop
       predictWebcam();
@@ -110,127 +110,140 @@ const App: React.FC = () => {
     if (ctx) {
       ctx.clearRect(0, 0, canvas2dRef.current.width, canvas2dRef.current.height);
       
-      // Set canvas size to match video
       if (canvas2dRef.current.width !== videoRef.current.videoWidth) {
         canvas2dRef.current.width = videoRef.current.videoWidth;
         canvas2dRef.current.height = videoRef.current.videoHeight;
       }
 
-      if (results && results.landmarks) {
+      if (results && results.landmarks && results.landmarks.length > 0) {
+        setHandDetected(true);
         const landmarks = results.landmarks;
         
-        if (landmarks.length > 0) {
-          setHandDetected(true);
-          
-          // --- SKELETON DRAWING ---
-          ctx.lineWidth = 2;
-          ctx.strokeStyle = "rgba(0, 255, 255, 0.4)";
-          ctx.fillStyle = "#FFFFFF";
+        // --- SKELETON DRAWING & HUD BOX ---
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "rgba(0, 255, 255, 0.4)";
+        ctx.fillStyle = "#FFFFFF";
 
-          // Process each hand
-          let foundLeftAction = false;
-          let foundRightAction = false;
-          let newGesture = "待机中";
+        let leftHand = null;
+        let rightHand = null;
 
-          for (const hand of landmarks) {
-            // Draw connections
-            for (let i = 0; i < hand.length; i++) {
-               const x = hand[i].x * ctx.canvas.width;
-               const y = hand[i].y * ctx.canvas.height;
-               ctx.beginPath();
-               ctx.arc(x, y, 2, 0, 2 * Math.PI);
-               ctx.fill();
-            }
-
-            // Draw Box around hand (HUD effect)
-            const xs = hand.map(l => l.x * ctx.canvas.width);
-            const ys = hand.map(l => l.y * ctx.canvas.height);
-            const minX = Math.min(...xs) - 20;
-            const maxX = Math.max(...xs) + 20;
-            const minY = Math.min(...ys) - 20;
-            const maxY = Math.max(...ys) + 20;
-            
-            ctx.strokeStyle = "rgba(0, 255, 255, 0.8)";
-            ctx.strokeRect(minX, minY, maxX - minX, maxY - minY);
-            // Label
-            ctx.font = "10px Rajdhani";
-            ctx.fillStyle = "#00FFFF";
-            ctx.fillText(`TRK: ${(maxX-minX).toFixed(0)}`, minX, minY - 5);
-
-            // Calculate Centroid
-            const wrist = hand[0];
-            
-            // --- LOGIC DISTINCTION BASED ON SCREEN SIDE ---
-            if (wrist.x < 0.55) { 
-              // *** LEFT SIDE (Or Main Hand) -> EARTH CONTROL ***
-              foundLeftAction = true;
-
-              // 1. Rotation (X/Y movement)
-              const targetRotX = mapRange(wrist.x, 0, 0.6, -Math.PI, Math.PI);
-              const targetRotY = mapRange(wrist.y, 0, 1, -1.2, 1.2);
-              
-              earthRotationRef.current.x = targetRotX;
-              earthRotationRef.current.y = targetRotY;
-
-              // 2. Push/Pull Scale Logic (Z-Depth approximation)
-              // Calculate Hand Size: Distance between Wrist(0) and Middle Finger MCP(9)
-              // Since coordinates are normalized (0-1), this works regardless of resolution
-              const handSize = distance(hand[0].x, hand[0].y, hand[9].x, hand[9].y);
-              
-              // Calibration: 
-              // Hand Far (Small) ~= 0.05 -> Pull (Scale Up)
-              // Hand Close (Big) ~= 0.25 -> Push (Scale Down / Shrink)
-              
-              // NOTE: User requested "Push forward (close to cam) -> Shrink"
-              // Inverse mapping: Size increases -> Scale decreases
-              const targetScale = mapRange(handSize, 0.05, 0.25, 2.5, 0.5); 
-              
-              // Clamp scale
-              const clampedScale = Math.max(0.5, Math.min(3.0, targetScale));
-              
-              setEarthScale(prev => lerp(prev, clampedScale, 0.08));
-
-              if (handSize > 0.15) newGesture = "推离 (缩放 -)";
-              else if (handSize < 0.08) newGesture = "拉近 (缩放 +)";
-              else newGesture = "旋转控制";
-
-            } else {
-              // *** RIGHT SIDE -> PANEL CONTROL ***
-              const pinchDist = distance(hand[4].x, hand[4].y, hand[8].x, hand[8].y);
-              
-              // Invert X because camera is mirrored
-              const screenX = 1 - wrist.x; 
-              const screenY = wrist.y;
-
-              setRightHandPos({ x: screenX, y: screenY });
-
-              if (pinchDist < 0.05) {
-                setIsDraggingRight(true);
-                foundRightAction = true;
-                
-                // Draw feedback line
-                ctx.beginPath();
-                ctx.moveTo(hand[4].x * ctx.canvas.width, hand[4].y * ctx.canvas.height);
-                ctx.lineTo(hand[8].x * ctx.canvas.width, hand[8].y * ctx.canvas.height);
-                ctx.strokeStyle = "#FF00FF";
-                ctx.lineWidth = 3;
-                ctx.stroke();
-                
-                if (!isDraggingRight) playSound('blip'); // Sound on engage
-              } else {
-                setIsDraggingRight(false);
-              }
-            }
+        // Categorize hands based on screen position (Mirrored: x < 0.5 is Left side of screen, actually user's Right hand usually, but let's call it Left Screen Hand)
+        // We will stick to Screen Left/Right for simplicity.
+        // Screen Left (x < 0.5) -> Controls Earth Rotation & Push/Pull
+        // Screen Right (x > 0.5) -> Controls Zoom (Pinch) & Panel
+        
+        for (const hand of landmarks) {
+          // Draw joints
+          for (let i = 0; i < hand.length; i++) {
+             const x = hand[i].x * ctx.canvas.width;
+             const y = hand[i].y * ctx.canvas.height;
+             ctx.beginPath();
+             ctx.arc(x, y, 3, 0, 2 * Math.PI);
+             ctx.fill();
           }
-          
-          if (!foundRightAction) setIsDraggingRight(false);
-          setGestureState(newGesture);
+          // Draw connections (simple loop)
+          // ... (simplified drawing for perf) ...
 
-        } else {
-          setHandDetected(false);
-          setIsDraggingRight(false);
-          setGestureState("扫描中...");
+          const wrist = hand[0];
+          if (wrist.x < 0.5) leftHand = hand;
+          else rightHand = hand;
         }
+
+        // --- INTERACTION LOGIC ---
+        let statusText = "系统待机";
+
+        // 1. DUAL HAND MODE (Flip Control)
+        if (leftHand && rightHand) {
+          statusText = "双重链接模式";
+          // Calculate relative height diff
+          const leftY = leftHand[0].y;
+          const rightY = rightHand[0].y;
+          const diffY = leftY - rightY; // Positive if Right is higher (smaller y)
+
+          // Map diffY to Pitch (X-rotation)
+          // If right hand is higher than left -> Tilt Up
+          // If right hand is lower -> Tilt Down
+          const targetTilt = mapRange(diffY, -0.3, 0.3, -1.0, 1.0);
+          earthRotationRef.current.x = lerp(earthRotationRef.current.x, targetTilt, 0.1);
+          
+          // Still allow Push/Pull from Left hand size? Maybe disable to avoid conflict
+        }
+        
+        // 2. LEFT HAND (Navigation & Physics Push/Pull)
+        if (leftHand) {
+          const wrist = leftHand[0];
+          
+          // Rotation (Yaw) based on X position
+          const targetRotY = mapRange(wrist.x, 0, 0.5, -1.5, 1.5);
+          earthRotationRef.current.y = targetRotY;
+
+          // PUSH / PULL LOGIC (Z-Depth)
+          // Measure hand size (Wrist to Middle Finger MCP)
+          const handSize = distance(leftHand[0].x, leftHand[0].y, leftHand[9].x, leftHand[9].y);
+          
+          // Logic: 
+          // Hand Big (Close to Cam, > 0.2) -> Push Away (Earth moves back, Z decreases)
+          // Hand Small (Far from Cam, < 0.1) -> Pull Close (Earth moves forward, Z increases)
+          
+          // Normal 'rest' size approx 0.15
+          // Map 0.1 (Far) -> Z = 2 (Close)
+          // Map 0.3 (Close) -> Z = -5 (Far)
+          const targetZ = mapRange(handSize, 0.08, 0.3, 2, -6);
+          earthPositionRef.current.z = lerp(earthPositionRef.current.z, targetZ, 0.05);
+
+          if (!rightHand) statusText = "姿态控制 (推/拉)";
+        }
+
+        // 3. RIGHT HAND (Precision Zoom & Panel)
+        if (rightHand) {
+          const thumb = rightHand[4];
+          const index = rightHand[8];
+          const pinchDist = distance(thumb.x, thumb.y, index.x, index.y);
+          
+          // PINCH / SPREAD LOGIC (Scale)
+          // Pinch (< 0.05) -> Shrink
+          // Spread (> 0.1) -> Enlarge
+          // We map the distance directly to scale for analog control
+          
+          // Map pinch 0.02 -> Scale 0.8
+          // Map pinch 0.20 -> Scale 2.5
+          const targetScale = mapRange(pinchDist, 0.02, 0.25, 0.8, 2.5);
+          setEarthScale(prev => lerp(prev, targetScale, 0.1));
+
+          // Draw Pinch Line
+          const tx = thumb.x * ctx.canvas.width;
+          const ty = thumb.y * ctx.canvas.height;
+          const ix = index.x * ctx.canvas.width;
+          const iy = index.y * ctx.canvas.height;
+          
+          ctx.beginPath();
+          ctx.moveTo(tx, ty);
+          ctx.lineTo(ix, iy);
+          ctx.strokeStyle = pinchDist < 0.05 ? "#FF00FF" : "#00FFFF";
+          ctx.lineWidth = pinchDist < 0.05 ? 4 : 1;
+          ctx.stroke();
+
+          // Panel Drag (Legacy)
+          setRightHandPos({ x: 1 - rightHand[0].x, y: rightHand[0].y });
+          if (pinchDist < 0.05) {
+             setIsDraggingRight(true);
+             if (!isDraggingRight) playSound('blip');
+          } else {
+             setIsDraggingRight(false);
+          }
+
+          if (!leftHand) statusText = "精密缩放 (捏合)";
+        }
+
+        setGestureState(statusText);
+
+      } else {
+        setHandDetected(false);
+        setGestureState("扫描中...");
+        // Auto rotate when idle
+        earthRotationRef.current.y += 0.002; 
+        // Return to neutral Z
+        earthPositionRef.current.z = lerp(earthPositionRef.current.z, 0, 0.02);
       }
     }
     
@@ -267,6 +280,7 @@ const App: React.FC = () => {
            <Suspense fallback={null}>
               <HologramEarth 
                 rotation={earthRotationRef.current} 
+                position={earthPositionRef.current}
                 scale={earthScale}
                 onContinentChange={setActiveContinent}
               />
