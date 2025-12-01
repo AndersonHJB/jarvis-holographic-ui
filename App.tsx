@@ -308,7 +308,7 @@ const App: React.FC = () => {
       {/* 1. Background Video */}
       <video
         ref={videoRef}
-        className="absolute top-0 left-0 w-full h-full object-cover transform -scale-x-100 filter brightness-50 contrast-125 sepia-[0.3] hue-rotate-[170deg]"
+        className="absolute top-0 left-0 w-full h-full object-cover transform -scale-x-100"
         autoPlay
         playsInline
         muted
