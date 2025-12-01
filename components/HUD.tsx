@@ -1,6 +1,6 @@
 
 import React, { useEffect, useRef, useState } from 'react';
-import { Activity, Globe, Wifi, Hand, Move, Mic } from 'lucide-react';
+import { Activity, Globe, Wifi, Hand, Move, Mic, Lock } from 'lucide-react';
 
 interface HUDProps {
   currentTime: string;
@@ -8,7 +8,7 @@ interface HUDProps {
   gestureState: string;
   activeContinent: string;
   rightHandPos: { x: number, y: number } | null;
-  isDraggingRight: boolean;
+  isDraggingRight: boolean; // Also acts as isGrabbing
   systemFPS: number;
   isSpeaking: boolean;
 }
@@ -26,9 +26,6 @@ const HUD: React.FC<HUDProps> = ({
   const [hexCodes, setHexCodes] = useState<string[]>([]);
   const panelRef = useRef<HTMLDivElement>(null);
   
-  // Initial Panel Position
-  const [panelPos, setPanelPos] = useState({ x: window.innerWidth - 320, y: 150 });
-  
   // Mock data generation
   useEffect(() => {
     const interval = setInterval(() => {
@@ -37,19 +34,6 @@ const HUD: React.FC<HUDProps> = ({
     }, 200);
     return () => clearInterval(interval);
   }, []);
-
-  // Handle Dragging Logic
-  useEffect(() => {
-    if (isDraggingRight && rightHandPos) {
-      const targetX = rightHandPos.x * window.innerWidth;
-      const targetY = rightHandPos.y * window.innerHeight;
-      
-      setPanelPos({
-        x: Math.max(0, Math.min(window.innerWidth - 300, targetX - 150)), 
-        y: Math.max(0, Math.min(window.innerHeight - 300, targetY - 100))
-      });
-    }
-  }, [isDraggingRight, rightHandPos]);
 
   return (
     <div className="absolute inset-0 pointer-events-none select-none z-20 text-cyan-400 font-mono overflow-hidden">
@@ -67,10 +51,6 @@ const HUD: React.FC<HUDProps> = ({
             <div className="w-24 bg-cyan-900/50 h-3 border border-cyan-500/30">
               <div className="bg-cyan-400 h-full animate-[pulse_2s_infinite]" style={{ width: '45%' }}></div>
             </div>
-          </div>
-          <div className="flex justify-between w-48">
-            <span>VISUAL CORTEX</span>
-            <span className="text-cyan-200">ACTIVE</span>
           </div>
           <div className="flex justify-between w-48">
              <span>FPS</span>
@@ -114,36 +94,31 @@ const HUD: React.FC<HUDProps> = ({
       </div>
 
       {/* --- Bottom Left: Hand Status --- */}
-      <div className="absolute bottom-8 left-8 border-l-4 border-cyan-500 pl-4 py-2 bg-black/40 backdrop-blur-sm">
+      <div className="absolute bottom-8 left-8 border-l-4 border-cyan-500 pl-4 py-2 bg-black/40 backdrop-blur-sm transition-all duration-300">
         <div className="flex items-center gap-3 mb-2">
-          <Hand className={`w-5 h-5 ${isHandDetected ? 'text-cyan-400' : 'text-red-500'}`} />
-          <span className="text-sm font-semibold tracking-wider">
-            HAND TRACKING: {isHandDetected ? 'LOCKED' : 'SEARCHING...'}
+          {isDraggingRight ? (
+            <Lock className="w-5 h-5 text-yellow-400 animate-pulse" />
+          ) : (
+            <Hand className={`w-5 h-5 ${isHandDetected ? 'text-cyan-400' : 'text-red-500'}`} />
+          )}
+          <span className={`text-sm font-semibold tracking-wider ${isDraggingRight ? 'text-yellow-400' : ''}`}>
+            {isDraggingRight ? 'OBJECT LOCKED' : (isHandDetected ? 'HAND TRACKING ACTIVE' : 'SEARCHING...')}
           </span>
         </div>
         <div className="text-xs space-y-1 text-cyan-300">
           <div>COMMAND: <span className="text-white font-bold">{gestureState}</span></div>
-          <div>MODE: <span className="text-white">{isDraggingRight ? 'INTERACTION' : 'OBSERVATION'}</span></div>
         </div>
       </div>
 
-      {/* --- Right: Draggable Info Panel --- */}
+      {/* --- Right: Analysis Panel (Floating) --- */}
       <div 
-        ref={panelRef}
-        style={{ 
-          transform: `translate(${panelPos.x}px, ${panelPos.y}px)`,
-          transition: isDraggingRight ? 'none' : 'transform 0.3s ease-out'
-        }}
-        className={`absolute w-72 bg-black/80 backdrop-blur-md border border-cyan-500/40 p-4 rounded-br-2xl shadow-[0_0_15px_rgba(0,255,255,0.15)] 
-          ${isDraggingRight ? 'border-white scale-105 shadow-[0_0_25px_rgba(0,255,255,0.4)]' : ''}
-        `}
+        className="absolute top-1/2 right-8 -translate-y-1/2 w-64 bg-black/80 backdrop-blur-md border border-cyan-500/40 p-4 rounded-br-2xl shadow-[0_0_15px_rgba(0,255,255,0.15)]"
       >
         <div className="flex items-center justify-between mb-4 border-b border-cyan-500/30 pb-2">
           <div className="flex items-center gap-2">
             <Globe className="w-4 h-4" />
             <h3 className="font-bold tracking-widest text-sm">TARGET ANALYSIS</h3>
           </div>
-          {isDraggingRight && <Move className="w-4 h-4 animate-pulse text-white" />}
         </div>
 
         <div className="space-y-4">
@@ -155,25 +130,29 @@ const HUD: React.FC<HUDProps> = ({
           <div className="grid grid-cols-2 gap-2 text-center">
             <div className="bg-black/40 p-2 border border-cyan-500/20">
               <div className="text-[10px] opacity-70">THREAT LEVEL</div>
-              <div className="text-sm font-bold text-red-400">LOW</div>
+              <div className="text-sm font-bold text-green-400">SAFE</div>
             </div>
             <div className="bg-black/40 p-2 border border-cyan-500/20">
-              <div className="text-[10px] opacity-70">ENERGY SIG</div>
+              <div className="text-[10px] opacity-70">ENERGY</div>
               <div className="text-sm font-bold">{Math.floor(Math.random() * 40 + 60)}%</div>
             </div>
           </div>
-
-          <div className="h-24 w-full bg-black/50 border border-cyan-500/20 relative overflow-hidden flex items-end">
-             {Array.from({ length: 15 }).map((_, i) => (
-               <div 
-                 key={i} 
-                 className="flex-1 bg-cyan-500/40 mx-[1px] hover:bg-cyan-400 transition-all"
-                 style={{ height: `${Math.random() * 80 + 20}%` }}
-               />
-             ))}
-          </div>
         </div>
       </div>
+      
+      {/* Center Target Recticle (Only when grabbing) */}
+      {isDraggingRight && rightHandPos && (
+         <div 
+           className="absolute w-20 h-20 border-2 border-yellow-400/50 rounded-full -translate-x-1/2 -translate-y-1/2 pointer-events-none z-0"
+           style={{ 
+             left: rightHandPos.x * window.innerWidth, 
+             top: rightHandPos.y * window.innerHeight 
+           }}
+         >
+           <div className="absolute inset-0 animate-ping border border-yellow-400/30 rounded-full"></div>
+         </div>
+      )}
+
     </div>
   );
 };

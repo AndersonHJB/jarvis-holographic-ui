@@ -7,6 +7,7 @@ import HUD from './components/HUD';
 import { distance, mapRange, lerp } from './utils/math';
 import { Loader2, Power } from 'lucide-react';
 import { playSound, speak } from './utils/audio';
+import * as THREE from 'three';
 
 const App: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -27,13 +28,19 @@ const App: React.FC = () => {
   
   // Earth Control State
   const earthRotationRef = useRef({ x: 0, y: 0 }); 
-  const earthPositionRef = useRef({ x: -2, y: 0, z: 0 }); // New: Control Z depth
+  // Default anchor position (Left side of screen)
+  const ANCHOR_POS = { x: -2.5, y: 0 }; 
+  const earthPositionRef = useRef({ x: ANCHOR_POS.x, y: ANCHOR_POS.y, z: 0 }); 
   const [earthScale, setEarthScale] = useState(1.5);
   const [activeContinent, setActiveContinent] = useState("系统初始化...");
 
+  // Interaction Flags
+  // Use ref for grabbing state inside loop to prevent closure staleness
+  const isGrabbingRef = useRef(false);
+  const [isGrabbingState, setIsGrabbingState] = useState(false); // For UI only
+
   // Panel Control State
   const [rightHandPos, setRightHandPos] = useState<{x: number, y: number} | null>(null);
-  const [isDraggingRight, setIsDraggingRight] = useState(false);
 
   // Time updater
   useEffect(() => {
@@ -90,8 +97,8 @@ const App: React.FC = () => {
     
     setTimeout(() => {
       setIsSpeaking(true);
-      speak("AI悦创你好，贾维斯系统已上线。全息投影准备就绪。");
-      setTimeout(() => setIsSpeaking(false), 5000);
+      speak("AI悦创你好，贾维斯系统已上线。");
+      setTimeout(() => setIsSpeaking(false), 4000);
       
       // Start Loop
       predictWebcam();
@@ -119,7 +126,7 @@ const App: React.FC = () => {
         setHandDetected(true);
         const landmarks = results.landmarks;
         
-        // --- SKELETON DRAWING & HUD BOX ---
+        // --- SKELETON DRAWING ---
         ctx.lineWidth = 2;
         ctx.strokeStyle = "rgba(0, 255, 255, 0.4)";
         ctx.fillStyle = "#FFFFFF";
@@ -127,11 +134,11 @@ const App: React.FC = () => {
         let leftHand = null;
         let rightHand = null;
 
-        // Categorize hands based on screen position (Mirrored: x < 0.5 is Left side of screen, actually user's Right hand usually, but let's call it Left Screen Hand)
-        // We will stick to Screen Left/Right for simplicity.
-        // Screen Left (x < 0.5) -> Controls Earth Rotation & Push/Pull
-        // Screen Right (x > 0.5) -> Controls Zoom (Pinch) & Panel
-        
+        // Simple categorization: x < 0.5 is Left, x > 0.5 is Right
+        // Note: Camera is mirrored visually but data might be relative.
+        // Assuming user facing camera: Screen Left is User Right Hand if not mirrored.
+        // But we applied CSS transform scaleX(-1).
+        // Let's stick to screen zones.
         for (const hand of landmarks) {
           // Draw joints
           for (let i = 0; i < hand.length; i++) {
@@ -141,98 +148,136 @@ const App: React.FC = () => {
              ctx.arc(x, y, 3, 0, 2 * Math.PI);
              ctx.fill();
           }
-          // Draw connections (simple loop)
-          // ... (simplified drawing for perf) ...
 
           const wrist = hand[0];
+          // Determine handedness by screen position for simplicity in this mirrored setup
           if (wrist.x < 0.5) leftHand = hand;
           else rightHand = hand;
         }
 
         // --- INTERACTION LOGIC ---
         let statusText = "系统待机";
+        let isGrabbingFrame = isGrabbingRef.current;
 
         // 1. DUAL HAND MODE (Flip Control)
         if (leftHand && rightHand) {
           statusText = "双重链接模式";
-          // Calculate relative height diff
           const leftY = leftHand[0].y;
           const rightY = rightHand[0].y;
-          const diffY = leftY - rightY; // Positive if Right is higher (smaller y)
+          const diffY = leftY - rightY; 
 
-          // Map diffY to Pitch (X-rotation)
-          // If right hand is higher than left -> Tilt Up
-          // If right hand is lower -> Tilt Down
           const targetTilt = mapRange(diffY, -0.3, 0.3, -1.0, 1.0);
           earthRotationRef.current.x = lerp(earthRotationRef.current.x, targetTilt, 0.1);
-          
-          // Still allow Push/Pull from Left hand size? Maybe disable to avoid conflict
         }
         
-        // 2. LEFT HAND (Navigation & Physics Push/Pull)
+        // 2. LEFT HAND (Navigation & Physics Push/Pull - Z Axis)
         if (leftHand) {
           const wrist = leftHand[0];
           
-          // Rotation (Yaw) based on X position
+          // Rotation (Yaw)
           const targetRotY = mapRange(wrist.x, 0, 0.5, -1.5, 1.5);
           earthRotationRef.current.y = targetRotY;
 
-          // PUSH / PULL LOGIC (Z-Depth)
-          // Measure hand size (Wrist to Middle Finger MCP)
+          // PUSH / PULL (Z-Depth)
+          // Hand Big (Close) -> Push Away (Z decreases)
+          // Hand Small (Far) -> Pull Close (Z increases)
+          // Only adjust Z if NOT actively grabbing with right hand to avoid conflict, 
+          // OR allow Z modulation while grabbing for full 3D control. Let's allow it.
           const handSize = distance(leftHand[0].x, leftHand[0].y, leftHand[9].x, leftHand[9].y);
-          
-          // Logic: 
-          // Hand Big (Close to Cam, > 0.2) -> Push Away (Earth moves back, Z decreases)
-          // Hand Small (Far from Cam, < 0.1) -> Pull Close (Earth moves forward, Z increases)
-          
-          // Normal 'rest' size approx 0.15
-          // Map 0.1 (Far) -> Z = 2 (Close)
-          // Map 0.3 (Close) -> Z = -5 (Far)
-          const targetZ = mapRange(handSize, 0.08, 0.3, 2, -6);
+          // Tuning: 0.05 (far) to 0.25 (close)
+          const targetZ = mapRange(handSize, 0.05, 0.25, 3, -8); 
           earthPositionRef.current.z = lerp(earthPositionRef.current.z, targetZ, 0.05);
 
           if (!rightHand) statusText = "姿态控制 (推/拉)";
         }
 
-        // 3. RIGHT HAND (Precision Zoom & Panel)
+        // 3. RIGHT HAND (Precision Zoom & GRAB MOVE)
         if (rightHand) {
           const thumb = rightHand[4];
           const index = rightHand[8];
           const pinchDist = distance(thumb.x, thumb.y, index.x, index.y);
           
-          // PINCH / SPREAD LOGIC (Scale)
-          // Pinch (< 0.05) -> Shrink
-          // Spread (> 0.1) -> Enlarge
-          // We map the distance directly to scale for analog control
-          
-          // Map pinch 0.02 -> Scale 0.8
-          // Map pinch 0.20 -> Scale 2.5
-          const targetScale = mapRange(pinchDist, 0.02, 0.25, 0.8, 2.5);
-          setEarthScale(prev => lerp(prev, targetScale, 0.1));
-
-          // Draw Pinch Line
-          const tx = thumb.x * ctx.canvas.width;
-          const ty = thumb.y * ctx.canvas.height;
-          const ix = index.x * ctx.canvas.width;
-          const iy = index.y * ctx.canvas.height;
-          
-          ctx.beginPath();
-          ctx.moveTo(tx, ty);
-          ctx.lineTo(ix, iy);
-          ctx.strokeStyle = pinchDist < 0.05 ? "#FF00FF" : "#00FFFF";
-          ctx.lineWidth = pinchDist < 0.05 ? 4 : 1;
-          ctx.stroke();
-
-          // Panel Drag (Legacy)
+          // Visual Feedback Pos
           setRightHandPos({ x: 1 - rightHand[0].x, y: rightHand[0].y });
-          if (pinchDist < 0.05) {
-             setIsDraggingRight(true);
-             if (!isDraggingRight) playSound('blip');
-          } else {
-             setIsDraggingRight(false);
-          }
 
-          if (!leftHand) statusText = "精密缩放 (捏合)";
+          // --- GRAB HYSTERESIS ---
+          // Enter grab at 0.05, Exit grab at 0.08 to prevent flickering
+          if (isGrabbingFrame) {
+             if (pinchDist > 0.08) isGrabbingFrame = false;
+          } else {
+             if (pinchDist < 0.05) isGrabbingFrame = true;
+          }
+          isGrabbingRef.current = isGrabbingFrame;
+
+          if (isGrabbingFrame) {
+             // --- GRAB & MOVE LOGIC (PRECISE MAPPING) ---
+             statusText = "物体抓取中";
+             
+             // Unproject logic: Map 2D Hand to 3D Plane at current depth
+             const cameraZ = 5; // Default camera Z in Three Fiber
+             const objectZ = earthPositionRef.current.z;
+             const distToCam = cameraZ - objectZ;
+             
+             // Vertical FOV is 45 degrees
+             const vFov = (45 * Math.PI) / 180;
+             // Visible height at this depth
+             const visibleHeight = 2 * Math.tan(vFov / 2) * distToCam;
+             // Visible width depends on aspect ratio
+             const aspect = window.innerWidth / window.innerHeight;
+             const visibleWidth = visibleHeight * aspect;
+
+             // Hand Coordinates: x (0..1), y (0..1)
+             // Mirror X: 1 - thumb.x
+             // Center: 0.5
+             
+             const rawX = 1 - thumb.x;
+             const rawY = thumb.y;
+
+             // Map 0..1 to -width/2 .. width/2
+             const targetX = (rawX - 0.5) * visibleWidth;
+             // Map 0..1 to height/2 .. -height/2 (Y is inverted in 3D)
+             const targetY = -(rawY - 0.5) * visibleHeight;
+
+             // Direct follow (tighter lerp for "stickiness")
+             earthPositionRef.current.x = lerp(earthPositionRef.current.x, targetX, 0.25);
+             earthPositionRef.current.y = lerp(earthPositionRef.current.y, targetY, 0.25);
+
+             // Draw Connection Line
+             const tx = thumb.x * ctx.canvas.width;
+             const ty = thumb.y * ctx.canvas.height;
+             const ix = index.x * ctx.canvas.width;
+             const iy = index.y * ctx.canvas.height;
+             ctx.beginPath();
+             ctx.moveTo(tx, ty);
+             ctx.lineTo(ix, iy);
+             ctx.strokeStyle = "#00FFFF";
+             ctx.lineWidth = 4;
+             ctx.stroke();
+
+          } else {
+             // --- SCALE LOGIC (Open Hand) ---
+             // Map pinch 0.05 -> Scale 0.5
+             // Map pinch 0.25 -> Scale 2.5
+             const targetScale = mapRange(pinchDist, 0.08, 0.25, 0.5, 2.5);
+             setEarthScale(prev => lerp(prev, targetScale, 0.1));
+
+             // Return to Anchor Logic (Only if not grabbed)
+             // When released, earth floats back to original position
+             earthPositionRef.current.x = lerp(earthPositionRef.current.x, ANCHOR_POS.x, 0.08);
+             earthPositionRef.current.y = lerp(earthPositionRef.current.y, ANCHOR_POS.y, 0.08);
+
+             if (!leftHand) statusText = "精密缩放 (捏合)";
+          }
+        } else {
+           // No right hand: Return to anchor
+           earthPositionRef.current.x = lerp(earthPositionRef.current.x, ANCHOR_POS.x, 0.05);
+           earthPositionRef.current.y = lerp(earthPositionRef.current.y, ANCHOR_POS.y, 0.05);
+           isGrabbingRef.current = false;
+        }
+
+        // Sync Ref to State for UI (throttled/batched by React, but okay)
+        if (isGrabbingState !== isGrabbingRef.current) {
+           setIsGrabbingState(isGrabbingRef.current);
         }
 
         setGestureState(statusText);
@@ -240,10 +285,13 @@ const App: React.FC = () => {
       } else {
         setHandDetected(false);
         setGestureState("扫描中...");
-        // Auto rotate when idle
+        // Auto rotate/reset when idle
         earthRotationRef.current.y += 0.002; 
-        // Return to neutral Z
         earthPositionRef.current.z = lerp(earthPositionRef.current.z, 0, 0.02);
+        earthPositionRef.current.x = lerp(earthPositionRef.current.x, ANCHOR_POS.x, 0.05);
+        earthPositionRef.current.y = lerp(earthPositionRef.current.y, ANCHOR_POS.y, 0.05);
+        isGrabbingRef.current = false;
+        if(isGrabbingState) setIsGrabbingState(false);
       }
     }
     
@@ -252,7 +300,7 @@ const App: React.FC = () => {
     setFps(Math.round(1000 / (endTime - startTime)));
 
     requestRef.current = requestAnimationFrame(predictWebcam);
-  }, [isDraggingRight]);
+  }, [isGrabbingState]); // Depend on state only if needed, mostly using refs inside loop
 
 
   return (
@@ -296,7 +344,7 @@ const App: React.FC = () => {
           gestureState={gestureState}
           activeContinent={activeContinent}
           rightHandPos={rightHandPos}
-          isDraggingRight={isDraggingRight}
+          isDraggingRight={isGrabbingState} 
           systemFPS={fps}
           isSpeaking={isSpeaking}
         />
