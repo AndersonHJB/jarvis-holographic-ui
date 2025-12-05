@@ -1,5 +1,7 @@
 你好，我是悦创。
 
+抓取最新代码，本地运行后。竖中指有惊喜！
+
 - 公众号：AI悦创
 - AI悦创·编程一对一网站：[https://bornforthis.cn/](https://bornforthis.cn/)
 - AI悦创博客：[https://blog.bornforthis.cn/](https://blog.bornforthis.cn/)
