@@ -28,16 +28,18 @@ const App: React.FC = () => {
   
   // Earth Control State
   const earthRotationRef = useRef({ x: 0, y: 0 }); 
-  // Default anchor position (Left side of screen)
   const ANCHOR_POS = { x: -2.5, y: 0 }; 
   const earthPositionRef = useRef({ x: ANCHOR_POS.x, y: ANCHOR_POS.y, z: 0 }); 
   const [earthScale, setEarthScale] = useState(1.5);
   const [activeContinent, setActiveContinent] = useState("系统初始化...");
+  
+  // Elimination Sequence State
+  const [eliminationStage, setEliminationStage] = useState<'idle' | 'locking' | 'exploding' | 'destroyed'>('idle');
+  const eliminationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Interaction Flags
-  // Use ref for grabbing state inside loop to prevent closure staleness
   const isGrabbingRef = useRef(false);
-  const [isGrabbingState, setIsGrabbingState] = useState(false); // For UI only
+  const [isGrabbingState, setIsGrabbingState] = useState(false);
 
   // Panel Control State
   const [rightHandPos, setRightHandPos] = useState<{x: number, y: number} | null>(null);
@@ -56,7 +58,6 @@ const App: React.FC = () => {
     const init = async () => {
       try {
         await VisionService.initialize();
-        
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
           const stream = await navigator.mediaDevices.getUserMedia({
              video: {
@@ -65,7 +66,6 @@ const App: React.FC = () => {
                facingMode: "user"
              }
           });
-          
           if (videoRef.current) {
             videoRef.current.srcObject = stream;
             videoRef.current.addEventListener('loadeddata', () => {
@@ -83,26 +83,86 @@ const App: React.FC = () => {
       }
     };
     init();
-    
     return () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Startup Sequence
   const handleStart = () => {
-    playSound('boot');
+    // 1. Audio Context Resume (Must happen on click)
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    ctx.resume().then(() => {
+        playSound('boot');
+    });
+
     setHasStarted(true);
     
+    // 2. Speak immediately
+    setIsSpeaking(true);
+    speak("悦创你好，贾维斯已就绪。");
+    
     setTimeout(() => {
-      setIsSpeaking(true);
-      speak("AI悦创你好，贾维斯系统已上线。");
-      setTimeout(() => setIsSpeaking(false), 4000);
+        setIsSpeaking(false);
+        predictWebcam();
+    }, 3000);
+  };
+
+  // Logic to Trigger Elimination Protocol
+  const triggerElimination = () => {
+    if (eliminationStage !== 'idle') return;
+    
+    setEliminationStage('locking');
+    setGestureState("目标锁定: 日本");
+    
+    // Voice: Trigger
+    setIsSpeaking(true);
+    speak("条件触发，开始抹除小日本。");
+    setTimeout(() => setIsSpeaking(false), 2500);
+
+    // Sound: Charge
+    playSound('charge'); 
+
+    // 3.0 seconds lock time then explode
+    eliminationTimerRef.current = setTimeout(() => {
+       setEliminationStage('exploding');
+       setGestureState("毁灭打击执行中");
+       playSound('explosion');
+       
+       // 2.0 second explosion animation then destroyed
+       setTimeout(() => {
+          setEliminationStage('destroyed');
+          setGestureState("目标清除完毕");
+          
+          // Voice: Aftermath
+          setIsSpeaking(true);
+          speak("小日本已经消失，准备启动：清除余党计划。");
+          setTimeout(() => setIsSpeaking(false), 4000);
+          
+          // Reset after 8 seconds
+          setTimeout(() => {
+             setEliminationStage('idle');
+          }, 8000);
+       }, 2000);
+    }, 3000);
+  };
+
+  // Robust Middle Finger Detection
+  const detectMiddleFinger = (hand: any[], wrist: any) => {
+      // Logic: The middle finger tip (12) should be the HIGHEST point (lowest Y value)
+      // And significantly higher than index (8), ring (16), and pinky (20)
+      const tipY = hand[12].y;
+      const indexY = hand[8].y;
+      const ringY = hand[16].y;
+      const pinkyY = hand[20].y;
+      const wristY = wrist.y;
+
+      // Threshold: fingers must be lower than middle finger by at least 0.05 (normalized coord)
+      // And wrist must be lower than tip (hand is upright)
+      const isUpright = wristY > tipY + 0.1;
+      const isMiddleHighest = tipY < indexY - 0.03 && tipY < ringY - 0.03 && tipY < pinkyY - 0.03;
       
-      // Start Loop
-      predictWebcam();
-    }, 800);
+      return isUpright && isMiddleHighest;
   };
 
   // Main Prediction Loop
@@ -112,7 +172,6 @@ const App: React.FC = () => {
     const startTime = performance.now();
     const results = VisionService.detect(videoRef.current);
     
-    // Draw on 2D Canvas (Skeleton)
     const ctx = canvas2dRef.current.getContext('2d');
     if (ctx) {
       ctx.clearRect(0, 0, canvas2dRef.current.width, canvas2dRef.current.height);
@@ -126,7 +185,6 @@ const App: React.FC = () => {
         setHandDetected(true);
         const landmarks = results.landmarks;
         
-        // --- SKELETON DRAWING ---
         ctx.lineWidth = 2;
         ctx.strokeStyle = "rgba(0, 255, 255, 0.4)";
         ctx.fillStyle = "#FFFFFF";
@@ -134,13 +192,8 @@ const App: React.FC = () => {
         let leftHand = null;
         let rightHand = null;
 
-        // Simple categorization: x < 0.5 is Left, x > 0.5 is Right
-        // Note: Camera is mirrored visually but data might be relative.
-        // Assuming user facing camera: Screen Left is User Right Hand if not mirrored.
-        // But we applied CSS transform scaleX(-1).
-        // Let's stick to screen zones.
+        // Basic Hand Classification and Drawing
         for (const hand of landmarks) {
-          // Draw joints
           for (let i = 0; i < hand.length; i++) {
              const x = hand[i].x * ctx.canvas.width;
              const y = hand[i].y * ctx.canvas.height;
@@ -148,150 +201,159 @@ const App: React.FC = () => {
              ctx.arc(x, y, 3, 0, 2 * Math.PI);
              ctx.fill();
           }
-
           const wrist = hand[0];
-          // Determine handedness by screen position for simplicity in this mirrored setup
+          // Simple classifier based on X position
           if (wrist.x < 0.5) leftHand = hand;
           else rightHand = hand;
         }
 
-        // --- INTERACTION LOGIC ---
         let statusText = "系统待机";
         let isGrabbingFrame = isGrabbingRef.current;
 
-        // 1. DUAL HAND MODE (Flip Control)
-        if (leftHand && rightHand) {
-          statusText = "双重链接模式";
-          const leftY = leftHand[0].y;
-          const rightY = rightHand[0].y;
-          const diffY = leftY - rightY; 
-
-          const targetTilt = mapRange(diffY, -0.3, 0.3, -1.0, 1.0);
-          earthRotationRef.current.x = lerp(earthRotationRef.current.x, targetTilt, 0.1);
-        }
-        
-        // 2. LEFT HAND (Navigation & Physics Push/Pull - Z Axis)
-        if (leftHand) {
-          const wrist = leftHand[0];
-          
-          // Rotation (Yaw)
-          const targetRotY = mapRange(wrist.x, 0, 0.5, -1.5, 1.5);
-          earthRotationRef.current.y = targetRotY;
-
-          // PUSH / PULL (Z-Depth)
-          // Hand Big (Close) -> Push Away (Z decreases)
-          // Hand Small (Far) -> Pull Close (Z increases)
-          const handSize = distance(leftHand[0].x, leftHand[0].y, leftHand[9].x, leftHand[9].y);
-          // Tuning: 0.05 (far) to 0.25 (close)
-          const targetZ = mapRange(handSize, 0.05, 0.25, 3, -8); 
-          earthPositionRef.current.z = lerp(earthPositionRef.current.z, targetZ, 0.05);
-
-          if (!rightHand) statusText = "姿态控制 (推/拉)";
+        // --- GLOBAL GESTURE CHECK (Middle Finger) ---
+        // High priority check before any movement logic
+        let eliminationTriggered = false;
+        if (eliminationStage === 'idle') {
+            if ((leftHand && detectMiddleFinger(leftHand, leftHand[0])) || 
+                (rightHand && detectMiddleFinger(rightHand, rightHand[0]))) {
+                triggerElimination();
+                eliminationTriggered = true;
+            }
         }
 
-        // 3. RIGHT HAND (Precision Zoom & GRAB MOVE & SPIN)
-        if (rightHand) {
-          const thumb = rightHand[4];
-          const index = rightHand[8];
-          const pinchDist = distance(thumb.x, thumb.y, index.x, index.y);
-          
-          // Visual Feedback Pos
-          setRightHandPos({ x: 1 - rightHand[0].x, y: rightHand[0].y });
+        // Only process movement if NOT eliminating
+        if (eliminationStage === 'idle' && !eliminationTriggered) {
 
-          // --- GRAB HYSTERESIS ---
-          // Enter grab at 0.05, Exit grab at 0.08 to prevent flickering
-          if (isGrabbingFrame) {
-             if (pinchDist > 0.08) isGrabbingFrame = false;
-          } else {
-             if (pinchDist < 0.05) isGrabbingFrame = true;
-          }
-          isGrabbingRef.current = isGrabbingFrame;
+            // 1. DUAL HAND MODE (Flip Control)
+            if (leftHand && rightHand) {
+              statusText = "双重链接模式";
+              const leftY = leftHand[0].y;
+              const rightY = rightHand[0].y;
+              const diffY = leftY - rightY; 
+              const targetTilt = mapRange(diffY, -0.3, 0.3, -1.0, 1.0);
+              earthRotationRef.current.x = lerp(earthRotationRef.current.x, targetTilt, 0.1);
+            }
+            
+            // 2. LEFT HAND (Rotation & Z-Depth)
+            if (leftHand) {
+              const wrist = leftHand[0];
+              const targetRotY = mapRange(wrist.x, 0, 0.5, -1.5, 1.5);
+              earthRotationRef.current.y = targetRotY;
 
-          if (isGrabbingFrame) {
-             // We are pinching. Now check if it's an "OK" gesture or just a pinch/grab.
-             // OK Gesture: Pinching, but Middle(12), Ring(16), Pinky(20) are EXTENDED.
-             // To check extension, distance from Tip to Wrist should be greater than PIP(10,14,18) to Wrist.
-             const wrist = rightHand[0];
-             const isMiddleExt = distance(wrist.x, wrist.y, rightHand[12].x, rightHand[12].y) > distance(wrist.x, wrist.y, rightHand[10].x, rightHand[10].y);
-             const isRingExt = distance(wrist.x, wrist.y, rightHand[16].x, rightHand[16].y) > distance(wrist.x, wrist.y, rightHand[14].x, rightHand[14].y);
-             const isPinkyExt = distance(wrist.x, wrist.y, rightHand[20].x, rightHand[20].y) > distance(wrist.x, wrist.y, rightHand[18].x, rightHand[18].y);
+              const handSize = distance(leftHand[0].x, leftHand[0].y, leftHand[9].x, leftHand[9].y);
+              const targetZ = mapRange(handSize, 0.05, 0.25, 3, -8); 
+              earthPositionRef.current.z = lerp(earthPositionRef.current.z, targetZ, 0.05);
 
-             // Loose check: at least 2 of the 3 fingers are extended
-             const extendedCount = (isMiddleExt ? 1 : 0) + (isRingExt ? 1 : 0) + (isPinkyExt ? 1 : 0);
-             const isOkGesture = extendedCount >= 2;
+              if (!rightHand) statusText = "姿态控制 (推/拉)";
+            }
 
-             if (isOkGesture) {
-                // --- GRAVITY SPIN MODE (OK Gesture) ---
-                statusText = "引力旋转模式";
-                // High speed spin
-                earthRotationRef.current.y += 0.25; 
-                // Auto scale to 'ball' size
-                setEarthScale(prev => lerp(prev, 0.8, 0.1));
-             } else {
-                // --- NORMAL GRAB MODE ---
-                statusText = "物体抓取中";
-             }
-             
-             // --- COMMON MOVE LOGIC (Unprojection) ---
-             const cameraZ = 5; 
-             const objectZ = earthPositionRef.current.z;
-             const distToCam = cameraZ - objectZ;
-             const vFov = (45 * Math.PI) / 180;
-             const visibleHeight = 2 * Math.tan(vFov / 2) * distToCam;
-             const aspect = window.innerWidth / window.innerHeight;
-             const visibleWidth = visibleHeight * aspect;
+            // 3. RIGHT HAND (Manipulation)
+            if (rightHand) {
+              const wrist = rightHand[0];
+              const thumb = rightHand[4];
+              const index = rightHand[8];
+              
+              setRightHandPos({ x: 1 - rightHand[0].x, y: rightHand[0].y });
+              
+              // Helper for fingers extended
+              const isFingerExtended = (tipIdx: number, pipIdx: number) => {
+                 return distance(wrist.x, wrist.y, rightHand[tipIdx].x, rightHand[tipIdx].y) > 
+                        distance(wrist.x, wrist.y, rightHand[pipIdx].x, rightHand[pipIdx].y) * 1.2;
+              };
 
-             const rawX = 1 - thumb.x;
-             const rawY = thumb.y;
+              const pinchDist = distance(thumb.x, thumb.y, index.x, index.y);
+              
+              // Hysteresis for pinch
+              if (isGrabbingFrame) {
+                 if (pinchDist > 0.08) isGrabbingFrame = false;
+              } else {
+                 if (pinchDist < 0.05) isGrabbingFrame = true;
+              }
+              isGrabbingRef.current = isGrabbingFrame;
 
-             const targetX = (rawX - 0.5) * visibleWidth;
-             const targetY = -(rawY - 0.5) * visibleHeight;
+              if (isGrabbingFrame) {
+                 // Check if OK gesture (Middle, Ring, Pinky extended)
+                 const isMiddleExt = isFingerExtended(12, 10);
+                 const isRingExt = isFingerExtended(16, 14);
+                 const isPinkyExt = isFingerExtended(20, 18);
+                 const extendedCount = (isMiddleExt ? 1 : 0) + (isRingExt ? 1 : 0) + (isPinkyExt ? 1 : 0);
+                 const isOkGesture = extendedCount >= 2;
 
-             earthPositionRef.current.x = lerp(earthPositionRef.current.x, targetX, 0.25);
-             earthPositionRef.current.y = lerp(earthPositionRef.current.y, targetY, 0.25);
+                 if (isOkGesture) {
+                    statusText = "引力旋转模式";
+                    earthRotationRef.current.y += 0.25; 
+                    setEarthScale(prev => lerp(prev, 0.8, 0.1));
+                 } else {
+                    statusText = "物体抓取中";
+                 }
+                 
+                 // Move Logic (Unprojection)
+                 const cameraZ = 5; 
+                 const objectZ = earthPositionRef.current.z;
+                 const distToCam = cameraZ - objectZ;
+                 const vFov = (45 * Math.PI) / 180;
+                 const visibleHeight = 2 * Math.tan(vFov / 2) * distToCam;
+                 const aspect = window.innerWidth / window.innerHeight;
+                 const visibleWidth = visibleHeight * aspect;
 
-             // Draw Connection Line
-             const tx = thumb.x * ctx.canvas.width;
-             const ty = thumb.y * ctx.canvas.height;
-             const ix = index.x * ctx.canvas.width;
-             const iy = index.y * ctx.canvas.height;
-             ctx.beginPath();
-             ctx.moveTo(tx, ty);
-             ctx.lineTo(ix, iy);
-             ctx.strokeStyle = isOkGesture ? "#FFD700" : "#00FFFF"; // Gold for OK, Cyan for Grab
-             ctx.lineWidth = isOkGesture ? 6 : 4;
-             ctx.stroke();
+                 const rawX = 1 - thumb.x;
+                 const rawY = thumb.y;
 
-          } else {
-             // --- SCALE LOGIC (Open Hand) ---
-             const targetScale = mapRange(pinchDist, 0.08, 0.25, 0.5, 2.5);
-             setEarthScale(prev => lerp(prev, targetScale, 0.1));
+                 const targetX = (rawX - 0.5) * visibleWidth;
+                 const targetY = -(rawY - 0.5) * visibleHeight;
 
-             // Return to Anchor Logic (Only if not grabbed)
-             earthPositionRef.current.x = lerp(earthPositionRef.current.x, ANCHOR_POS.x, 0.08);
-             earthPositionRef.current.y = lerp(earthPositionRef.current.y, ANCHOR_POS.y, 0.08);
+                 earthPositionRef.current.x = lerp(earthPositionRef.current.x, targetX, 0.25);
+                 earthPositionRef.current.y = lerp(earthPositionRef.current.y, targetY, 0.25);
 
-             if (!leftHand) statusText = "精密缩放 (捏合)";
-          }
-        } else {
-           // No right hand: Return to anchor
-           earthPositionRef.current.x = lerp(earthPositionRef.current.x, ANCHOR_POS.x, 0.05);
-           earthPositionRef.current.y = lerp(earthPositionRef.current.y, ANCHOR_POS.y, 0.05);
-           isGrabbingRef.current = false;
+                 // Draw Connection Line
+                 const tx = thumb.x * ctx.canvas.width;
+                 const ty = thumb.y * ctx.canvas.height;
+                 const ix = index.x * ctx.canvas.width;
+                 const iy = index.y * ctx.canvas.height;
+                 ctx.beginPath();
+                 ctx.moveTo(tx, ty);
+                 ctx.lineTo(ix, iy);
+                 ctx.strokeStyle = isOkGesture ? "#FFD700" : "#00FFFF";
+                 ctx.lineWidth = isOkGesture ? 6 : 4;
+                 ctx.stroke();
+
+              } else {
+                 // Scale Logic (Spread)
+                 const targetScale = mapRange(pinchDist, 0.08, 0.25, 0.5, 2.5);
+                 setEarthScale(prev => lerp(prev, targetScale, 0.1));
+                 earthPositionRef.current.x = lerp(earthPositionRef.current.x, ANCHOR_POS.x, 0.08);
+                 earthPositionRef.current.y = lerp(earthPositionRef.current.y, ANCHOR_POS.y, 0.08);
+                 if (!leftHand) statusText = "精密缩放 (捏合)";
+              }
+            } else {
+               // No right hand
+               earthPositionRef.current.x = lerp(earthPositionRef.current.x, ANCHOR_POS.x, 0.05);
+               earthPositionRef.current.y = lerp(earthPositionRef.current.y, ANCHOR_POS.y, 0.05);
+               isGrabbingRef.current = false;
+            }
         }
 
-        // Sync Ref to State for UI (throttled/batched by React, but okay)
+        // Sync grab state
         if (isGrabbingState !== isGrabbingRef.current) {
            setIsGrabbingState(isGrabbingRef.current);
+        }
+        
+        // Override status text if eliminating
+        if (eliminationStage !== 'idle') {
+           if (eliminationStage === 'locking') statusText = "武器锁定中";
+           if (eliminationStage === 'exploding') statusText = "毁灭打击执行中";
+           if (eliminationStage === 'destroyed') statusText = "目标已清除";
         }
 
         setGestureState(statusText);
 
       } else {
+        // No hands detected
         setHandDetected(false);
         setGestureState("扫描中...");
-        // Auto rotate/reset when idle
-        earthRotationRef.current.y += 0.002; 
+        if (eliminationStage === 'idle') {
+           earthRotationRef.current.y += 0.002; 
+        }
         earthPositionRef.current.z = lerp(earthPositionRef.current.z, 0, 0.02);
         earthPositionRef.current.x = lerp(earthPositionRef.current.x, ANCHOR_POS.x, 0.05);
         earthPositionRef.current.y = lerp(earthPositionRef.current.y, ANCHOR_POS.y, 0.05);
@@ -300,17 +362,15 @@ const App: React.FC = () => {
       }
     }
     
-    // FPS calc
     const endTime = performance.now();
     setFps(Math.round(1000 / (endTime - startTime)));
 
     requestRef.current = requestAnimationFrame(predictWebcam);
-  }, [isGrabbingState]); // Depend on state only if needed, mostly using refs inside loop
+  }, [isGrabbingState, eliminationStage]); 
 
 
   return (
     <div className="relative w-screen h-screen bg-black overflow-hidden select-none">
-      {/* 1. Background Video */}
       <video
         ref={videoRef}
         className="absolute top-0 left-0 w-full h-full object-cover transform -scale-x-100"
@@ -318,14 +378,10 @@ const App: React.FC = () => {
         playsInline
         muted
       />
-
-      {/* 2. Skeleton Canvas Overlay */}
       <canvas 
         ref={canvas2dRef}
         className="absolute top-0 left-0 w-full h-full object-cover transform -scale-x-100 pointer-events-none opacity-60 z-10"
       />
-
-      {/* 3. 3D Scene Layer */}
       <div className="absolute top-0 left-0 w-full h-full z-10 pointer-events-none">
         <Canvas camera={{ position: [0, 0, 5], fov: 45 }}>
            <ambientLight intensity={0.5} />
@@ -336,12 +392,11 @@ const App: React.FC = () => {
                 position={earthPositionRef.current}
                 scale={earthScale}
                 onContinentChange={setActiveContinent}
+                eliminationStage={eliminationStage}
               />
            </Suspense>
         </Canvas>
       </div>
-
-      {/* 4. React HUD Overlay */}
       {hasStarted && !loading && !error && (
         <HUD 
           currentTime={currentTime}
@@ -354,13 +409,10 @@ const App: React.FC = () => {
           isSpeaking={isSpeaking}
         />
       )}
-
-      {/* Start / Loading Screen */}
       {(!hasStarted || loading) && !error && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black z-50 text-cyan-500 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')]">
            <div className="relative group cursor-pointer" onClick={!loading ? handleStart : undefined}>
              <div className="absolute -inset-1 bg-gradient-to-r from-cyan-600 to-blue-600 rounded-full blur opacity-25 group-hover:opacity-75 transition duration-1000 group-hover:duration-200"></div>
-             
              <div className={`relative w-24 h-24 rounded-full bg-black border-2 ${loading ? 'border-cyan-800' : 'border-cyan-400'} flex items-center justify-center`}>
                 {loading ? (
                    <Loader2 className="w-10 h-10 animate-spin text-cyan-600" />
@@ -369,7 +421,6 @@ const App: React.FC = () => {
                 )}
              </div>
            </div>
-           
            <h2 className="text-3xl font-bold tracking-[0.3em] mt-8 animate-pulse text-center">
              {loading ? "INITIALIZING SYSTEMS" : "J.A.R.V.I.S"}
            </h2>
@@ -378,8 +429,6 @@ const App: React.FC = () => {
            </p>
         </div>
       )}
-
-      {/* Error Screen */}
       {error && (
         <div className="absolute inset-0 flex items-center justify-center bg-black/90 z-50">
           <div className="border border-red-500 p-8 text-red-500 text-center rounded bg-red-950/20 backdrop-blur-md">

@@ -1,6 +1,7 @@
 
 // Audio Context Singleton
 let audioCtx: AudioContext | null = null;
+let voicesLoaded = false;
 
 const getCtx = () => {
   if (!audioCtx) {
@@ -9,8 +10,20 @@ const getCtx = () => {
   return audioCtx;
 };
 
+// Preload voices to avoid silence on first speak
+if (typeof window !== 'undefined' && window.speechSynthesis) {
+  const checkVoices = () => {
+    const voices = window.speechSynthesis.getVoices();
+    if (voices.length > 0) {
+      voicesLoaded = true;
+    }
+  };
+  checkVoices();
+  window.speechSynthesis.onvoiceschanged = checkVoices;
+}
+
 // 1. Sound Effects (Oscillators)
-export const playSound = (type: 'boot' | 'blip' | 'scan' | 'error') => {
+export const playSound = (type: 'boot' | 'blip' | 'scan' | 'error' | 'charge' | 'explosion') => {
   const ctx = getCtx();
   if (ctx.state === 'suspended') ctx.resume();
 
@@ -24,7 +37,6 @@ export const playSound = (type: 'boot' | 'blip' | 'scan' | 'error') => {
 
   switch (type) {
     case 'boot':
-      // Power up sound
       osc.type = 'sine';
       osc.frequency.setValueAtTime(100, now);
       osc.frequency.exponentialRampToValueAtTime(800, now + 0.5);
@@ -36,7 +48,6 @@ export const playSound = (type: 'boot' | 'blip' | 'scan' | 'error') => {
       break;
       
     case 'blip':
-      // High tech UI interaction
       osc.type = 'square';
       osc.frequency.setValueAtTime(800, now);
       osc.frequency.exponentialRampToValueAtTime(1200, now + 0.05);
@@ -47,7 +58,6 @@ export const playSound = (type: 'boot' | 'blip' | 'scan' | 'error') => {
       break;
 
     case 'scan':
-      // Scanning hum
       osc.type = 'sawtooth';
       osc.frequency.setValueAtTime(200, now);
       gain.gain.setValueAtTime(0.05, now);
@@ -65,28 +75,100 @@ export const playSound = (type: 'boot' | 'blip' | 'scan' | 'error') => {
       osc.start(now);
       osc.stop(now + 0.3);
       break;
+
+    case 'charge':
+      // Rising pitch for charging weapon
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(100, now);
+      osc.frequency.exponentialRampToValueAtTime(800, now + 1.5);
+      // Add a second layer for texture
+      const osc2 = ctx.createOscillator();
+      osc2.type = 'sawtooth';
+      osc2.frequency.setValueAtTime(50, now);
+      osc2.frequency.linearRampToValueAtTime(200, now + 1.5);
+      const gain2 = ctx.createGain();
+      osc2.connect(gain2);
+      gain2.connect(ctx.destination);
+      
+      gain.gain.setValueAtTime(0, now);
+      gain.gain.linearRampToValueAtTime(0.5, now + 1.5);
+      gain2.gain.setValueAtTime(0, now);
+      gain2.gain.linearRampToValueAtTime(0.2, now + 1.5);
+      
+      osc.start(now);
+      osc.stop(now + 1.5);
+      osc2.start(now);
+      osc2.stop(now + 1.5);
+      break;
+
+    case 'explosion':
+      // 1. Sub-bass impact (The Earthquake)
+      const subOsc = ctx.createOscillator();
+      subOsc.type = 'sine';
+      subOsc.frequency.setValueAtTime(80, now); // Slightly higher start
+      subOsc.frequency.exponentialRampToValueAtTime(10, now + 3.0); // Deep drop
+      const subGain = ctx.createGain();
+      subOsc.connect(subGain);
+      subGain.connect(ctx.destination);
+      subGain.gain.setValueAtTime(1.5, now);
+      subGain.gain.exponentialRampToValueAtTime(0.01, now + 3.0);
+      subOsc.start(now);
+      subOsc.stop(now + 3.0);
+
+      // 2. White noise blast (The Fire)
+      const bufferSize = ctx.sampleRate * 2.5; 
+      const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bufferSize, 2); // Non-linear decay
+      }
+      const noise = ctx.createBufferSource();
+      noise.buffer = buffer;
+      
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(1000, now);
+      filter.frequency.exponentialRampToValueAtTime(50, now + 2.0);
+      
+      const noiseGain = ctx.createGain();
+      noiseGain.gain.setValueAtTime(2.0, now); // Louder
+      noiseGain.gain.exponentialRampToValueAtTime(0.01, now + 2.0);
+      
+      noise.connect(filter);
+      filter.connect(noiseGain);
+      noiseGain.connect(ctx.destination);
+      noise.start(now);
+      break;
   }
 };
 
 // 2. Text to Speech (JARVIS Voice)
+// Keep a reference to prevent Garbage Collection
+let currentUtterance: SpeechSynthesisUtterance | null = null;
+
 export const speak = (text: string) => {
   if (!window.speechSynthesis) return;
   
-  // Cancel previous speech
+  // Cancel any ongoing speech
   window.speechSynthesis.cancel();
 
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.rate = 1.0;
-  utterance.pitch = 0.8; // Lower pitch for JARVIS feel
-  utterance.volume = 1.0;
+  currentUtterance = new SpeechSynthesisUtterance(text);
+  currentUtterance.rate = 1.0; 
+  currentUtterance.pitch = 0.8; 
+  currentUtterance.volume = 1.0;
 
-  // Try to find a good Chinese voice, otherwise fallback
+  // Try to find a Chinese voice, preferably Microsoft YaHei or Google Putonghua
   const voices = window.speechSynthesis.getVoices();
-  const zhVoice = voices.find(v => v.lang.includes('zh') || v.lang.includes('CN'));
+  const zhVoice = voices.find(v => v.lang === 'zh-CN' || v.lang.includes('zh'));
   
   if (zhVoice) {
-    utterance.voice = zhVoice;
+    currentUtterance.voice = zhVoice;
   }
 
-  window.speechSynthesis.speak(utterance);
+  // Prevent GC by clearing the reference only after speaking
+  currentUtterance.onend = () => {
+    currentUtterance = null;
+  };
+
+  window.speechSynthesis.speak(currentUtterance);
 };
