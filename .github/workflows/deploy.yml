@@ -30,8 +30,8 @@ jobs:
       # 3. 安装依赖
       - name: Install and Build 🔧
         run: |
-          pnpm install
-          pnpm run build
+          npm install
+          npm run build
         # 注意：这里会运行 package.json 中的 build 命令 (tsc && vite build)
         # 生成的文件会默认放在 dist 文件夹中
 
